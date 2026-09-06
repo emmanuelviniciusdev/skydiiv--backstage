@@ -200,7 +200,10 @@ Each CF Queues event publishes to its **own** queue ID env var (declared as `que
 
 Catalog IDs, names, and brokers must stay in sync with the SkyDIIV web app (`EVENTS` / `BROKER_NAMES` in `app/lib/outbox.ts`). To add a new route, see [Adding a New Event](../README.md#adding-a-new-event) in the main README.
 
-See also [SCRAPE_SHOPPING_SUGGESTIONS.md](../../robot-scrape-products/docs/SCRAPE_SHOPPING_SUGGESTIONS.md) and [PUBLISH_EVENTS.md](../../robot-scrape-products/docs/PUBLISH_EVENTS.md).
+The `scrape-shopping-suggestions` queue exists only to drain leftover rows —
+`robot-scrape-products` no longer consumes Cloudflare Queues. It now reads
+unprocessed `search_terms_scraped_products` rows directly; see
+[ENJOEI_SCRAPING.md](../../robot-scrape-products/docs/ENJOEI_SCRAPING.md).
 
 ---
 
@@ -420,4 +423,4 @@ sequenceDiagram
 - [`README.md`](../README.md) — worker setup, deployment, adding new events
 - [`apps/worker-sync/README.md`](../../worker-sync/README.md) — language sync workflow reference
 - [`apps/worker-notification/docs/EMAIL_WELCOME_WORKFLOW.md`](../../worker-notification/docs/EMAIL_WELCOME_WORKFLOW.md) — welcome email workflow reference
-- [`apps/robot-scrape-products/docs/SCRAPE_SHOPPING_SUGGESTIONS.md`](../../robot-scrape-products/docs/SCRAPE_SHOPPING_SUGGESTIONS.md) — scrape shopping suggestions consumer
+- [`apps/robot-scrape-products/docs/ENJOEI_SCRAPING.md`](../../robot-scrape-products/docs/ENJOEI_SCRAPING.md) — how the scrape robot searches Enjoei and confirms sizes

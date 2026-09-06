@@ -49,15 +49,16 @@ Each `results_search_terms_scraped_products` row MUST store `search_term_scraped
 - `currency` (string)
 - `url` (string)
 - `image_url` (string)
-- `metadata` (object; extra marketplace fields)
+- `metadata` (object; extra marketplace fields, including `size`)
 
-Missing image URLs MUST use the existing scraped-product placeholder `https://assets.skydiiv.space/placeholder--scraped-product.png`. Missing currency MUST default to `BRL` for Enjoei.
+Missing image URLs MUST use the existing scraped-product placeholder `https://assets.skydiiv.space/placeholder--scraped-product.png`. Missing currency MUST default to `BRL` for Enjoei. `metadata.size` MUST carry the size published by the marketplace for that listing, or `null` when the search requested no size.
 
 #### Scenario: Successful listing is persisted with core fields
 
 - **GIVEN** a scraped Enjoei listing with title, price, URL, and image
 - **WHEN** the robot writes the result row
 - **THEN** `json_result` includes `marketplace`, `title`, `price`, `currency`, `url`, `image_url`, and a `metadata` object
+- **AND** `metadata.size` holds the listing's size
 - **AND** `is_processed` is `false`
 
 ### Requirement: Enqueue analyze via outbox per panorama after its batch
@@ -86,7 +87,7 @@ After the robot has finished every unprocessed search term for a given `wardrobe
 
 ### Requirement: Marketplace scraper selection from the row
 
-The robot MUST resolve the scraper from `search_terms_scraped_products.marketplace` (case-insensitive). Unknown marketplace names MUST mark the search term processed without inserting result rows and MUST continue with remaining terms. Enjoei search URLs MUST keep using term, gender, and size filters from `json_search`.
+The robot MUST resolve the scraper from `search_terms_scraped_products.marketplace` (case-insensitive). Unknown marketplace names MUST mark the search term processed without inserting result rows and MUST continue with remaining terms. Enjoei search URLs MUST keep using term, gender, and size filters from `json_search`, sending the gender as Enjoei's `department` param (`d`) — `dep` is Enjoei's `recommendation_department` and does not filter the feed.
 
 #### Scenario: Unknown marketplace does not abort the panorama
 
@@ -95,3 +96,34 @@ The robot MUST resolve the scraper from `search_terms_scraped_products.marketpla
 - **THEN** the unknown term is marked `is_processed = true` with no result rows
 - **AND** the Enjoei term is still scraped
 - **AND** an analyze outbox row is still inserted for that panorama after both terms are processed
+
+### Requirement: Persisted listings match the requested size
+
+When a search term's `json_search` requests any size (`topSize`, `bottomSize`, or `footSize`), every persisted listing MUST have a size published by the marketplace that matches one of the requested sizes. The marketplace's own search filters MUST NOT be the only check: the robot MUST read the size from the listing's own page and compare it to the request. Sizes MUST be compared case-insensitively and without accents (`Único` matches `unico`). A listing whose size cannot be read MUST be discarded rather than persisted. Search terms that request no size MUST NOT open listing pages.
+
+#### Scenario: Wrong-size listings are not persisted
+
+- **GIVEN** a search term requesting `topSize` `M`
+- **AND** the results page lists items whose listing pages publish sizes `M`, `GG`, and `M`
+- **WHEN** the robot processes that term
+- **THEN** only the two `M` listings become result rows
+
+#### Scenario: The listing page overrides the results-page size
+
+- **GIVEN** a results-page card showing size `M` whose listing page publishes `GG`
+- **WHEN** the robot processes a term requesting `M`
+- **THEN** that listing is discarded
+
+#### Scenario: Ten listings are still filled from later results
+
+- **GIVEN** a search term requesting `topSize` `M`
+- **AND** the first eight results are other sizes, followed by ten `M` results
+- **WHEN** the robot processes that term
+- **THEN** ten result rows exist, all of size `M`
+
+#### Scenario: Sizeless terms skip listing pages
+
+- **GIVEN** a search term whose `json_search` requests no size
+- **WHEN** the robot processes that term
+- **THEN** it performs no listing-page navigation
+- **AND** up to 10 listings are persisted from the results page

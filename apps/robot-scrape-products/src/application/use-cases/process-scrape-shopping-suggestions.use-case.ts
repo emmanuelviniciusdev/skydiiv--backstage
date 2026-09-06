@@ -157,12 +157,14 @@ function toSuccessInsert(
     scrapedAt: scrapedAt.toISOString(),
     marketplace,
     searchParams: toSearchParamsJson(product.searchParams),
+    size: product.size,
     raw: {
       title: product.title,
       price: product.price,
       currency: product.currency,
       url: product.url,
       imageUrl: product.imageUrl,
+      size: product.size,
     },
   }
 

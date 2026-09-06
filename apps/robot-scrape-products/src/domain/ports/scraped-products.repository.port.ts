@@ -11,6 +11,8 @@ export type ScrapingMetadata = {
   marketplace: string
   /** Full search criteria used for this scrape attempt. */
   searchParams: SearchParamsJson
+  /** Size published by the marketplace, confirmed on the listing page. */
+  size?: string | null
   /** Pure values as returned by the scraper (before DB coercion). */
   raw?: {
     title: string | null
@@ -18,6 +20,7 @@ export type ScrapingMetadata = {
     currency: string | null
     url: string | null
     imageUrl: string | null
+    size: string | null
   }
   error?: {
     message: string

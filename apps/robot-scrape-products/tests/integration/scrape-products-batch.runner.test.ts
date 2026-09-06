@@ -45,11 +45,12 @@ describe("ScrapeProductsBatchRunner", () => {
         currency: "BRL",
         url: "https://www.enjoei.com.br/p/1",
         imageUrl: "https://img.example/1.jpg",
+        size: "M",
         searchTerm: "blazer",
         searchParams: {
           searchTerm: "blazer",
           gender: null,
-          topSize: null,
+          topSize: "M",
           bottomSize: null,
           footSize: null,
           brand: null,
@@ -77,6 +78,77 @@ describe("ScrapeProductsBatchRunner", () => {
     expect(insertAnalyze).toHaveBeenNthCalledWith(2, { wardrobePanoramaId: "p2" })
     expect(publish).toHaveBeenCalledTimes(2)
     expect(deleteSelf).toHaveBeenCalledOnce()
+  })
+
+  it("persists the confirmed listing size in json_result.metadata", async () => {
+    const insertResultsAndMarkProcessed = vi.fn().mockResolvedValue(undefined)
+
+    const runner = new ScrapeProductsBatchRunner({
+      searchTermsRepository: {
+        findUnprocessedGroupedByPanorama: vi.fn().mockResolvedValue([
+          {
+            wardrobePanoramaId: "p1",
+            terms: [
+              {
+                id: "t1",
+                wardrobePanoramaId: "p1",
+                marketplace: "enjoei",
+                jsonSearch: {
+                  term: "blusa",
+                  gender: "Female",
+                  topSize: "M",
+                  bottomSize: null,
+                  footSize: null,
+                },
+              },
+            ],
+          },
+        ]),
+      } as never,
+      searchResultsRepository: { insertResultsAndMarkProcessed } as never,
+      outboxRepository: {
+        insertAnalyzeScrapedProductsResults: vi.fn().mockResolvedValue("outbox-1"),
+      } as never,
+      outboxPublisher: { publishProcessOutboxEvent: vi.fn() },
+      resolveScraper: () => ({
+        marketplace: "enjoei",
+        scrape: vi.fn().mockResolvedValue([
+          {
+            marketplace: "enjoei",
+            title: "blusa de linho",
+            price: 80,
+            currency: "BRL",
+            url: "https://www.enjoei.com.br/p/blusa-1",
+            imageUrl: "https://img.example/1.jpg",
+            size: "M",
+            searchTerm: "blusa",
+            searchParams: {
+              searchTerm: "blusa",
+              gender: "Female",
+              topSize: "M",
+              bottomSize: null,
+              footSize: null,
+              brand: null,
+            },
+          },
+        ]),
+      }),
+      selfDelete: { deleteSelf: vi.fn() },
+      logger: silentLogger(),
+      concurrency: 2,
+    })
+
+    await runner.start()
+
+    expect(insertResultsAndMarkProcessed).toHaveBeenCalledWith({
+      searchTermId: "t1",
+      results: [
+        expect.objectContaining({
+          title: "blusa de linho",
+          metadata: expect.objectContaining({ size: "M" }),
+        }),
+      ],
+    })
   })
 
   it("skips already-processed terms because the repository only returns unprocessed rows", async () => {

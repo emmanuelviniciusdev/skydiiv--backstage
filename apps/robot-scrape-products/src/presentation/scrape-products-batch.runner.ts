@@ -55,6 +55,7 @@ function toJsonResult(product: ScrapedProduct): JsonResult {
     url: product.url,
     image_url: product.imageUrl || PLACEHOLDER_IMAGE_URL,
     metadata: {
+      size: product.size,
       searchParams: toSearchParamsJson(product.searchParams),
     },
   }

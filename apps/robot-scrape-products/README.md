@@ -18,7 +18,7 @@ Env: [docs/ENV.md](docs/ENV.md) · Deploy: [deploy/README.md](deploy/README.md)
 | Step | What it does |
 |---|---|
 | Load unprocessed terms | Grouped by `wardrobe_panorama_id` |
-| Scrape | Enjoei, up to 10 listings per search term |
+| Scrape | Enjoei, up to 10 listings per search term, each with its size confirmed on the listing page ([ENJOEI_SCRAPING.md](docs/ENJOEI_SCRAPING.md)) |
 | Persist | `json_result` rows + mark terms `is_processed` |
 | Outbox | One `analyze-scraped-products-results` row per panorama, then QStash `{ outboxEventId }` to `{WORKER_OUTBOX_EVENTS_URL}/process-outbox-event` |
 | Exit | Self-delete the Container Instance |
@@ -137,5 +137,6 @@ npm run lint
 
 ## Docs
 
+- [Enjoei scraping](docs/ENJOEI_SCRAPING.md) — search URL filters, size confirmation, DOM contract
 - [Environment files](docs/ENV.md)
 - [Deploy & infrastructure](deploy/README.md)

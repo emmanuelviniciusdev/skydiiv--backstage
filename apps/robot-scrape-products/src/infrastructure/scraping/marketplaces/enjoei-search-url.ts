@@ -5,6 +5,9 @@ export const ENJOEI_ORIGIN = "https://www.enjoei.com.br"
 /**
  * Maps SkyDIIV shopping-suggestions gender values to Enjoei department slugs.
  * "No preference" (and unknown values) omit the department filter.
+ *
+ * `mocas` / `rapazes` are Enjoei's legacy aliases and still resolve, but the
+ * current slugs are `feminino` / `masculino`.
  */
 const GENDER_TO_DEPARTMENT: Record<string, string> = {
   female: "feminino",
@@ -25,10 +28,16 @@ export function parseSizeList(value: string | null | undefined): string[] {
 }
 
 /**
- * Enjoei size option slugs are lowercase (e.g. "m", "pp", "40").
+ * Enjoei size option slugs are lowercase and unaccented ("m", "pp", "40",
+ * "unico"). An unknown slug makes Enjoei return zero results rather than
+ * ignoring the filter, so normalization has to match their option slugs.
  */
 export function toEnjoeiSizeSlug(size: string): string {
-  return size.trim().toLowerCase()
+  return size
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
 }
 
 /**
@@ -45,7 +54,7 @@ export function toEnjoeiBrandSlug(brand: string): string {
 }
 
 /**
- * Resolves a SkyDIIV gender preference to an Enjoei `dep` slug, or null when
+ * Resolves a SkyDIIV gender preference to an Enjoei `d` slug, or null when
  * the department filter should be omitted.
  */
 export function mapGenderToEnjoeiDepartment(gender: string | null): string | null {
@@ -58,15 +67,46 @@ export function mapGenderToEnjoeiDepartment(gender: string | null): string | nul
 }
 
 /**
+ * Every size token requested for a search, as Enjoei slugs, regardless of the
+ * size type it belongs to. An empty list means "any size is acceptable".
+ */
+export function requestedEnjoeiSizeSlugs(params: SearchParams): string[] {
+  const tokens = [
+    ...parseSizeList(params.topSize),
+    ...parseSizeList(params.bottomSize),
+    ...parseSizeList(params.footSize),
+  ].map(toEnjoeiSizeSlug)
+
+  return [...new Set(tokens.filter((slug) => slug.length > 0))]
+}
+
+/**
+ * Whether a listing's size satisfies the requested sizes.
+ *
+ * A null/blank listing size is *not* a match: the size has to be read from the
+ * listing before it can be trusted (see `EnjoeiScraper`).
+ */
+export function matchesRequestedEnjoeiSize(
+  requestedSlugs: string[],
+  listingSize: string | null | undefined,
+): boolean {
+  if (requestedSlugs.length === 0) return true
+  if (!listingSize) return false
+  return requestedSlugs.includes(toEnjoeiSizeSlug(listingSize))
+}
+
+/**
  * Builds an Enjoei search URL with advanced filters.
  *
  * Query params (from Enjoei `abbr-params-map`):
- * - `q`  — search term
- * - `dep` — department / gender (feminino | masculino)
- * - `b`  — brand slug
+ * - `q`  — search term (`query`)
+ * - `d`  — department / gender (`feminino` | `masculino`)
+ * - `b`  — brand slug (`brands`)
  * - `sc` — clothes / top sizes (repeat)
  * - `sw` — waist / bottom sizes (repeat)
  * - `ss` — shoes / foot sizes (repeat)
+ *
+ * `dep` is Enjoei's `recommendation_department`, **not** the department filter.
  */
 export function buildEnjoeiSearchUrl(params: SearchParams): string {
   const url = new URL(`${ENJOEI_ORIGIN}/s/`)
@@ -74,7 +114,7 @@ export function buildEnjoeiSearchUrl(params: SearchParams): string {
 
   const department = mapGenderToEnjoeiDepartment(params.gender)
   if (department) {
-    url.searchParams.set("dep", department)
+    url.searchParams.set("d", department)
   }
 
   if (params.brand?.trim()) {

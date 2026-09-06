@@ -10,6 +10,8 @@ export interface ScrapedProduct {
   currency: string | null
   url: string
   imageUrl: string | null
+  /** Size as published by the marketplace, read from the listing page. */
+  size: string | null
   /** Denormalized free-text query (also persisted in the search_term column). */
   searchTerm: string
   /** Full criteria used for this scrape (persisted in scraping_metadata). */

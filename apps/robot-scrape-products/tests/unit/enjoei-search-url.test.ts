@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest"
 import {
   buildEnjoeiSearchUrl,
   mapGenderToEnjoeiDepartment,
+  matchesRequestedEnjoeiSize,
   parseSizeList,
+  requestedEnjoeiSizeSlugs,
   toEnjoeiBrandSlug,
   toEnjoeiSizeSlug,
 } from "../../src/infrastructure/scraping/marketplaces/enjoei-search-url.js"
@@ -22,7 +24,12 @@ describe("toEnjoeiSizeSlug", () => {
     expect(toEnjoeiSizeSlug("M")).toBe("m")
     expect(toEnjoeiSizeSlug("PP")).toBe("pp")
     expect(toEnjoeiSizeSlug("40")).toBe("40")
-    expect(toEnjoeiSizeSlug("XGG+")).toBe("xgg+")
+    expect(toEnjoeiSizeSlug("XGG")).toBe("xgg")
+  })
+
+  it("strips accents so accented sizes match Enjoei option slugs", () => {
+    expect(toEnjoeiSizeSlug("Único")).toBe("unico")
+    expect(toEnjoeiSizeSlug(" único ")).toBe("unico")
   })
 })
 
@@ -48,6 +55,49 @@ describe("mapGenderToEnjoeiDepartment", () => {
   })
 })
 
+describe("requestedEnjoeiSizeSlugs", () => {
+  it("collects every requested size across the three size types", () => {
+    expect(
+      requestedEnjoeiSizeSlugs(
+        searchParams("camiseta", { topSize: "M, G", bottomSize: "40", footSize: "38" }),
+      ),
+    ).toEqual(["m", "g", "40", "38"])
+  })
+
+  it("is empty when the search asks for no size", () => {
+    expect(requestedEnjoeiSizeSlugs(searchParams("cinto couro"))).toEqual([])
+  })
+
+  it("deduplicates sizes shared by two size types", () => {
+    expect(
+      requestedEnjoeiSizeSlugs(searchParams("macacão", { topSize: "40", bottomSize: "40" })),
+    ).toEqual(["40"])
+  })
+})
+
+describe("matchesRequestedEnjoeiSize", () => {
+  it("accepts any listing when no size was requested", () => {
+    expect(matchesRequestedEnjoeiSize([], "GG")).toBe(true)
+    expect(matchesRequestedEnjoeiSize([], null)).toBe(true)
+  })
+
+  it("compares sizes as Enjoei slugs", () => {
+    expect(matchesRequestedEnjoeiSize(["m"], "M")).toBe(true)
+    expect(matchesRequestedEnjoeiSize(["unico"], "Único")).toBe(true)
+    expect(matchesRequestedEnjoeiSize(["m", "g"], "G")).toBe(true)
+  })
+
+  it("rejects a different size", () => {
+    expect(matchesRequestedEnjoeiSize(["m"], "GG")).toBe(false)
+    expect(matchesRequestedEnjoeiSize(["38"], "40")).toBe(false)
+  })
+
+  it("rejects a listing whose size is unknown", () => {
+    expect(matchesRequestedEnjoeiSize(["m"], null)).toBe(false)
+    expect(matchesRequestedEnjoeiSize(["m"], "")).toBe(false)
+  })
+})
+
 describe("buildEnjoeiSearchUrl", () => {
   it("builds a query-only URL when filters are null", () => {
     expect(buildEnjoeiSearchUrl(searchParams("vestido floral"))).toBe(
@@ -67,8 +117,15 @@ describe("buildEnjoeiSearchUrl", () => {
     )
 
     expect(url).toBe(
-      "https://www.enjoei.com.br/s/?q=camiseta&dep=feminino&b=emporio-armani&sc=m&sc=g&sw=40&ss=38",
+      "https://www.enjoei.com.br/s/?q=camiseta&d=feminino&b=emporio-armani&sc=m&sc=g&sw=40&ss=38",
     )
+  })
+
+  it("uses `d` for the department — `dep` is Enjoei's recommendation_department", () => {
+    const url = buildEnjoeiSearchUrl(searchParams("blusa", { gender: "Female" }))
+
+    expect(url).toContain("d=feminino")
+    expect(url).not.toContain("dep=")
   })
 
   it("omits size and brand params when they are null", () => {
@@ -82,6 +139,6 @@ describe("buildEnjoeiSearchUrl", () => {
       }),
     )
 
-    expect(url).toBe("https://www.enjoei.com.br/s/?q=jaqueta&dep=masculino")
+    expect(url).toBe("https://www.enjoei.com.br/s/?q=jaqueta&d=masculino")
   })
 })
