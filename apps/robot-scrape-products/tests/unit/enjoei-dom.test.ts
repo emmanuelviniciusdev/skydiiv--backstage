@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 /// <reference lib="dom" />
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   ENJOEI_EXTRACT_PRODUCTS,
   enjoeiReadListingSizeScript,
+  enjoeiReadProductSizesScript,
   type EnjoeiDomProduct,
+  type EnjoeiProductSizeLookup,
 } from "../../src/infrastructure/scraping/marketplaces/enjoei.scraper.js"
 
 /**
@@ -25,6 +27,30 @@ function extract(): EnjoeiDomProduct[] {
 
 function readListingSize(timeoutMs = 50): Promise<string | null> {
   return evaluateScript<Promise<string | null>>(enjoeiReadListingSizeScript(timeoutMs))
+}
+
+function readProductSizes(ids: string[]): Promise<Record<string, EnjoeiProductSizeLookup>> {
+  return evaluateScript<Promise<Record<string, EnjoeiProductSizeLookup>>>(
+    enjoeiReadProductSizesScript(ids),
+  )
+}
+
+/** Stubs the `fetch` the script uses, answering per product id. */
+function stubProductJson(
+  bodyById: Record<string, { ok?: boolean; status?: number; body?: unknown }>,
+): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn(async (url: string) => {
+    const id = /products\/(\d+)\/v2\.json/.exec(url)?.[1] ?? ""
+    const entry = bodyById[id]
+    if (!entry) throw new TypeError("Failed to fetch")
+    return {
+      ok: entry.ok ?? true,
+      status: entry.status ?? 200,
+      json: async () => entry.body,
+    }
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  return fetchMock
 }
 
 /** Trimmed from a live `/s/` result card. */
@@ -173,5 +199,81 @@ describe("enjoeiReadListingSizeScript", () => {
     document.body.innerHTML = '<div class="l-info-box">condição do produto usado</div>'
 
     await expect(readListingSize()).resolves.toBeNull()
+  })
+})
+
+describe("enjoeiReadProductSizesScript", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("reads sizes for several ids in one pass, from the product JSON host", async () => {
+    const fetchMock = stubProductJson({
+      "149242785": { body: { id: 149242785, size: "40" } },
+      "143818536": { body: { id: 143818536, size: "PP" } },
+    })
+
+    await expect(readProductSizes(["149242785", "143818536"])).resolves.toEqual({
+      "149242785": { size: "40" },
+      "143818536": { size: "PP" },
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://pages.enjoei.com.br/products/149242785/v2.json",
+      { headers: { accept: "application/json" }, credentials: "omit" },
+    )
+  })
+
+  it("trims the size and reports a blank one as no size", async () => {
+    stubProductJson({
+      "1": { body: { size: " M " } },
+      "2": { body: { size: "   " } },
+    })
+
+    await expect(readProductSizes(["1", "2"])).resolves.toEqual({
+      "1": { size: "M" },
+      "2": { size: null },
+    })
+  })
+
+  it("reports an explicit null size as no size rather than an error", async () => {
+    stubProductJson({ "1": { body: { id: 1, size: null } } })
+
+    await expect(readProductSizes(["1"])).resolves.toEqual({ "1": { size: null } })
+  })
+
+  it("reports a missing size key as an error, so the caller can fall back", async () => {
+    stubProductJson({ "1": { body: { id: 1, title: "cinto de couro" } } })
+
+    await expect(readProductSizes(["1"])).resolves.toEqual({
+      "1": { error: "no size field in the product JSON" },
+    })
+  })
+
+  it("reports a non-ok response as an error", async () => {
+    stubProductJson({ "1": { ok: false, status: 404 } })
+
+    await expect(readProductSizes(["1"])).resolves.toEqual({ "1": { error: "HTTP 404" } })
+  })
+
+  it("reports a thrown fetch as an error", async () => {
+    stubProductJson({})
+
+    await expect(readProductSizes(["1"])).resolves.toEqual({
+      "1": { error: "Failed to fetch" },
+    })
+  })
+
+  it("isolates one failing id from the rest of the batch", async () => {
+    stubProductJson({
+      "1": { body: { size: "G" } },
+      "2": { ok: false, status: 500 },
+      "3": { body: { size: "GG" } },
+    })
+
+    await expect(readProductSizes(["1", "2", "3"])).resolves.toEqual({
+      "1": { size: "G" },
+      "2": { error: "HTTP 500" },
+      "3": { size: "GG" },
+    })
   })
 })

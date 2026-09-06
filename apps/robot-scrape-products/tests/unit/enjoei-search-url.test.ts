@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   buildEnjoeiSearchUrl,
+  enjoeiProductIdFromUrl,
   mapGenderToEnjoeiDepartment,
   matchesRequestedEnjoeiSize,
   parseSizeList,
@@ -16,6 +17,35 @@ describe("parseSizeList", () => {
     expect(parseSizeList("40")).toEqual(["40"])
     expect(parseSizeList(null)).toEqual([])
     expect(parseSizeList("")).toEqual([])
+  })
+})
+
+describe("enjoeiProductIdFromUrl", () => {
+  it("reads the trailing id, not digits inside the slug", () => {
+    expect(
+      enjoeiProductIdFromUrl(
+        "https://www.enjoei.com.br/p/bermuda-masculina-uvx-jeans-branca-40-149242785",
+      ),
+    ).toBe("149242785")
+  })
+
+  it("ignores a query string and a trailing slash", () => {
+    expect(
+      enjoeiProductIdFromUrl("https://www.enjoei.com.br/p/jaqueta-143818536?rsid=abc&rsp=1"),
+    ).toBe("143818536")
+    expect(enjoeiProductIdFromUrl("https://www.enjoei.com.br/p/jaqueta-143818536/")).toBe(
+      "143818536",
+    )
+  })
+
+  it("reads an id with no slug before it", () => {
+    expect(enjoeiProductIdFromUrl("https://www.enjoei.com.br/p/-149242785")).toBe("149242785")
+  })
+
+  it("returns null when there is no trailing id or no listing path", () => {
+    expect(enjoeiProductIdFromUrl("https://www.enjoei.com.br/p/sem-id")).toBeNull()
+    expect(enjoeiProductIdFromUrl("https://www.enjoei.com.br/s/?q=blusa")).toBeNull()
+    expect(enjoeiProductIdFromUrl("")).toBeNull()
   })
 })
 

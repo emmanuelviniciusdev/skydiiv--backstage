@@ -17,6 +17,19 @@ const GENDER_TO_DEPARTMENT: Record<string, string> = {
 }
 
 /**
+ * Extracts the numeric product id from an Enjoei listing URL.
+ *
+ * Listing paths are `/p/{slug}-{id}`, where the slug is human-readable filler
+ * and the trailing id is the key for `pages.enjoei.com.br`. Slugs routinely end
+ * in digits of their own ("…-branca-40-149242785"), so only the final `-digits`
+ * group counts.
+ */
+export function enjoeiProductIdFromUrl(url: string): string | null {
+  const path = (url.split("?")[0] ?? "").replace(/\/+$/, "")
+  return /\/p\//.test(path) ? (path.match(/-(\d+)$/)?.[1] ?? null) : null
+}
+
+/**
  * Parses a stored size list ("M, G" or "40") into individual tokens.
  */
 export function parseSizeList(value: string | null | undefined): string[] {

@@ -11,7 +11,7 @@ export type ScrapingMetadata = {
   marketplace: string
   /** Full search criteria used for this scrape attempt. */
   searchParams: SearchParamsJson
-  /** Size published by the marketplace, confirmed on the listing page. */
+  /** Size published by the marketplace, confirmed against the listing's own record. */
   size?: string | null
   /** Pure values as returned by the scraper (before DB coercion). */
   raw?: {

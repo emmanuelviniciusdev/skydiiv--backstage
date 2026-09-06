@@ -99,7 +99,7 @@ The robot MUST resolve the scraper from `search_terms_scraped_products.marketpla
 
 ### Requirement: Persisted listings match the requested size
 
-When a search term's `json_search` requests any size (`topSize`, `bottomSize`, or `footSize`), every persisted listing MUST have a size published by the marketplace that matches one of the requested sizes. The marketplace's own search filters MUST NOT be the only check: the robot MUST read the size from the listing's own page and compare it to the request. Sizes MUST be compared case-insensitively and without accents (`Único` matches `unico`). A listing whose size cannot be read MUST be discarded rather than persisted. Search terms that request no size MUST NOT open listing pages.
+When a search term's `json_search` requests any size (`topSize`, `bottomSize`, or `footSize`), every persisted listing MUST have a size published by the marketplace that matches one of the requested sizes. The marketplace's own search filters MUST NOT be the only check: the robot MUST read the size from the listing's own record — for Enjoei, its product JSON, falling back to its listing page when that cannot be read — and compare it to the request. Sizes MUST be compared case-insensitively and without accents (`Único` matches `unico`). A listing whose size cannot be read MUST be discarded rather than persisted. Search terms that request no size MUST NOT perform any per-listing lookup.
 
 #### Scenario: Wrong-size listings are not persisted
 
@@ -108,11 +108,18 @@ When a search term's `json_search` requests any size (`topSize`, `bottomSize`, o
 - **WHEN** the robot processes that term
 - **THEN** only the two `M` listings become result rows
 
-#### Scenario: The listing page overrides the results-page size
+#### Scenario: The listing's own record overrides the results-page size
 
-- **GIVEN** a results-page card showing size `M` whose listing page publishes `GG`
+- **GIVEN** a results-page card showing size `M` whose own record publishes `GG`
 - **WHEN** the robot processes a term requesting `M`
 - **THEN** that listing is discarded
+
+#### Scenario: An unreadable size source falls back rather than discarding
+
+- **GIVEN** a candidate listing whose product JSON is unreachable or no longer carries a size field
+- **WHEN** the robot confirms that listing's size
+- **THEN** it reads the size from the listing's page instead
+- **AND** a listing confirmed that way is persisted when its size matches
 
 #### Scenario: Ten listings are still filled from later results
 
@@ -121,9 +128,9 @@ When a search term's `json_search` requests any size (`topSize`, `bottomSize`, o
 - **WHEN** the robot processes that term
 - **THEN** ten result rows exist, all of size `M`
 
-#### Scenario: Sizeless terms skip listing pages
+#### Scenario: Sizeless terms skip per-listing lookups
 
 - **GIVEN** a search term whose `json_search` requests no size
 - **WHEN** the robot processes that term
-- **THEN** it performs no listing-page navigation
+- **THEN** it performs no product-JSON lookup and no listing-page navigation
 - **AND** up to 10 listings are persisted from the results page

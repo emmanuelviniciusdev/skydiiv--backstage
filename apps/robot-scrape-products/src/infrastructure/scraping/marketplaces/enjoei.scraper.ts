@@ -2,6 +2,7 @@ import type { ScrapedProduct } from "../../../domain/entities/scraped-product.js
 import type { SearchParams } from "../../../domain/entities/search-params.js"
 import type {
   BrowserFactoryPort,
+  BrowserPage,
   BrowserSession,
 } from "../../../domain/ports/browser-factory.port.js"
 import type { DelayPort } from "../../../domain/ports/delay.port.js"
@@ -13,6 +14,7 @@ import type {
 } from "../../../domain/ports/marketplace-scraper.port.js"
 import {
   buildEnjoeiSearchUrl,
+  enjoeiProductIdFromUrl,
   matchesRequestedEnjoeiSize,
   requestedEnjoeiSizeSlugs,
 } from "./enjoei-search-url.js"
@@ -39,17 +41,23 @@ export interface EnjoeiDomProduct {
 const MAX_PRODUCTS_PER_SEARCH = 10
 
 /**
- * Upper bound on listing pages opened to confirm a size for one search. Enjoei
- * renders 30 cards per page; the cap keeps a broken card selector from turning
- * one search into 30 navigations.
+ * Upper bound on size confirmations for one search. Enjoei renders ~30 cards
+ * per page, so this lets every card on the page be checked while still bounding
+ * the work when the card selector breaks and no card can be pre-filtered.
  */
-const MAX_SIZE_CHECKS_PER_SEARCH = 20
+const MAX_SIZE_CHECKS_PER_SEARCH = 30
 
 /** Cards read from one search results page. */
 const MAX_CARDS_PER_SEARCH = 60
 
+/** Product-JSON lookups issued per `page.evaluate` fan-out. */
+const SIZE_LOOKUP_CONCURRENCY = 5
+
 /** How long the listing page is polled for its hydrated "tamanho" value. */
 const LISTING_SIZE_TIMEOUT_MS = 8_000
+
+/** Host serving the per-listing JSON view used to confirm sizes. */
+export const ENJOEI_PRODUCT_JSON_ORIGIN = "https://pages.enjoei.com.br"
 
 /**
  * Browser-side extractor for the product cards under Enjoei's default
@@ -57,7 +65,7 @@ const LISTING_SIZE_TIMEOUT_MS = 8_000
  * the image-link textContent (that often is just the discount badge, e.g. "7%").
  *
  * The card size is a hint used to skip listings before opening them; the size
- * that gets persisted is always read from the listing page.
+ * that gets persisted is always read from the listing's own record.
  */
 export const ENJOEI_EXTRACT_PRODUCTS = `(() => {
   const cards = Array.from(document.querySelectorAll(".c-product-card")).slice(0, ${MAX_CARDS_PER_SEARCH});
@@ -119,9 +127,68 @@ export const ENJOEI_EXTRACT_PRODUCTS = `(() => {
   return products;
 })()`
 
+/** One entry of the product-size batch: either a size, or why there is none. */
+export interface EnjoeiProductSizeLookup {
+  /** Present when the lookup succeeded. `null` means the listing has no size. */
+  size?: string | null
+  /** Present when the listing could not be read, or lost its `size` field. */
+  error?: string
+}
+
+/**
+ * Browser-side batch reader for the authoritative size of several listings,
+ * from `pages.enjoei.com.br/products/{id}/v2.json`.
+ *
+ * This runs inside the *search results* page rather than against a listing
+ * page: that host answers with
+ * `access-control-allow-origin: https://www.enjoei.com.br` and nothing else
+ * (a foreign origin gets `null`), so the search page is the only context where
+ * the fetch is permitted — and it inherits that page's fingerprint, cookies
+ * and proxy for free.
+ *
+ * A missing `size` key is reported as an error rather than as "no size": the
+ * endpoint is undocumented, and the two cases have to be distinguished so a
+ * shape change falls back to the listing page instead of silently discarding
+ * every candidate. A listing with no size set answers `{"size": null}`, with
+ * the key present.
+ */
+export function enjoeiReadProductSizesScript(productIds: string[]): string {
+  return `(async () => {
+  const ids = ${JSON.stringify(productIds)};
+  const out = {};
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const response = await fetch(
+        "${ENJOEI_PRODUCT_JSON_ORIGIN}/products/" + id + "/v2.json",
+        { headers: { accept: "application/json" }, credentials: "omit" },
+      );
+      if (!response.ok) {
+        out[id] = { error: "HTTP " + response.status };
+        return;
+      }
+      const body = await response.json();
+      if (!body || typeof body !== "object" || !("size" in body)) {
+        out[id] = { error: "no size field in the product JSON" };
+        return;
+      }
+      out[id] = {
+        size: typeof body.size === "string" && body.size.trim() ? body.size.trim() : null,
+      };
+    } catch (err) {
+      out[id] = { error: err && err.message ? String(err.message) : String(err) };
+    }
+  }));
+  return out;
+})()`
+}
+
 /**
  * Browser-side reader for the authoritative size on an Enjoei listing page
  * (the "tamanho" info box). The value is hydrated client-side, so it is polled.
+ *
+ * This is the fallback for when the product JSON above cannot be read; it is
+ * the slow path (one navigation per listing) but depends only on the same DOM
+ * contract as the search cards.
  */
 export function enjoeiReadListingSizeScript(timeoutMs: number): string {
   return `(async () => {
@@ -149,8 +216,8 @@ const ENJOEI_READ_LISTING_SIZE = enjoeiReadListingSizeScript(LISTING_SIZE_TIMEOU
  * "mais relevantes" ranking, with optional gender/size/brand filters.
  *
  * When a search asks for sizes, every returned listing has its size read from
- * its own listing page and checked against the request — Enjoei's URL filters
- * are not trusted on their own. See docs/ENJOEI_SCRAPING.md.
+ * that listing's own record and checked against the request — Enjoei's URL
+ * filters are not trusted on their own. See docs/ENJOEI_SCRAPING.md.
  */
 export class EnjoeiScraper implements MarketplaceScraperPort {
   readonly marketplace = "enjoei"
@@ -179,8 +246,6 @@ export class EnjoeiScraper implements MarketplaceScraperPort {
           await this.deps.delay.humanDelay()
         }
 
-        const requestedSizes = requestedEnjoeiSizeSlugs(params)
-
         this.deps.logger.info("Scraping Enjoei search", {
           userId: input.userId,
           searchTerm: params.searchTerm,
@@ -189,44 +254,10 @@ export class EnjoeiScraper implements MarketplaceScraperPort {
           bottomSize: params.bottomSize,
           footSize: params.footSize,
           brand: params.brand,
-          requestedSizes,
+          requestedSizes: requestedEnjoeiSizeSlugs(params),
         })
 
-        const url = this.buildSearchUrl(params)
-        const listings = await this.readSearchResults(browser, url)
-
-        if (listings.length === 0) {
-          this.deps.logger.warn("No relevant Enjoei products found", {
-            searchTerm: params.searchTerm,
-            url,
-          })
-          continue
-        }
-
-        const selected =
-          requestedSizes.length === 0
-            ? listings.slice(0, MAX_PRODUCTS_PER_SEARCH)
-            : await this.selectBySize(browser, listings, requestedSizes, params)
-
-        for (const listing of selected) {
-          products.push({
-            marketplace: this.marketplace,
-            title: listing.title,
-            price: listing.price,
-            currency: listing.currency,
-            url: listing.url,
-            imageUrl: listing.imageUrl,
-            size: listing.size ?? null,
-            searchTerm: params.searchTerm,
-            searchParams: params,
-          })
-        }
-
-        this.deps.logger.debug("Enjoei search scrape output", {
-          searchTerm: params.searchTerm,
-          cardCount: listings.length,
-          productCount: selected.length,
-        })
+        products.push(...(await this.scrapeSearchParams(browser, params)))
       }
     } finally {
       await browser.close()
@@ -242,90 +273,221 @@ export class EnjoeiScraper implements MarketplaceScraperPort {
     return products
   }
 
-  private async readSearchResults(
+  /**
+   * Scrapes one search params entry.
+   *
+   * The search page is kept open for the whole entry, because the size
+   * confirmation below runs its fetches from inside it.
+   */
+  private async scrapeSearchParams(
     browser: BrowserSession,
-    url: string,
-  ): Promise<EnjoeiDomProduct[]> {
+    params: SearchParams,
+  ): Promise<ScrapedProduct[]> {
+    const requestedSizes = requestedEnjoeiSizeSlugs(params)
+    const url = this.buildSearchUrl(params)
     const page = await browser.newPage()
+
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 })
+      const listings = await this.readSearchResults(page, url)
 
-      // Wait for product cards to hydrate past the skeleton state.
-      await this.deps.delay.humanDelay()
+      if (listings.length === 0) {
+        this.deps.logger.warn("No relevant Enjoei products found", {
+          searchTerm: params.searchTerm,
+          url,
+        })
+        return []
+      }
 
-      const extracted = await page.evaluate<EnjoeiDomProduct[]>(
-        ENJOEI_EXTRACT_PRODUCTS,
-      )
-      return Array.isArray(extracted) ? extracted : []
+      const selected =
+        requestedSizes.length === 0
+          ? listings.slice(0, MAX_PRODUCTS_PER_SEARCH)
+          : await this.selectBySize(browser, page, listings, requestedSizes, params)
+
+      this.deps.logger.debug("Enjoei search scrape output", {
+        searchTerm: params.searchTerm,
+        cardCount: listings.length,
+        productCount: selected.length,
+      })
+
+      return selected.map((listing) => ({
+        marketplace: this.marketplace,
+        title: listing.title,
+        price: listing.price,
+        currency: listing.currency,
+        url: listing.url,
+        imageUrl: listing.imageUrl,
+        size: listing.size ?? null,
+        searchTerm: params.searchTerm,
+        searchParams: params,
+      }))
     } finally {
       await page.close()
     }
   }
 
+  private async readSearchResults(
+    page: BrowserPage,
+    url: string,
+  ): Promise<EnjoeiDomProduct[]> {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 })
+
+    // Wait for product cards to hydrate past the skeleton state.
+    await this.deps.delay.humanDelay()
+
+    const extracted = await page.evaluate<EnjoeiDomProduct[]>(ENJOEI_EXTRACT_PRODUCTS)
+    return Array.isArray(extracted) ? extracted : []
+  }
+
   /**
-   * Keeps only listings whose own listing page publishes a requested size.
+   * Keeps only listings whose own record publishes a requested size.
    *
-   * Cards whose size could not be read are still opened — the listing page is
-   * the authority, so a changed card layout costs extra navigations instead of
+   * Cards whose size could not be read are still checked — the listing itself
+   * is the authority, so a changed card layout costs extra lookups instead of
    * silently letting wrong sizes through.
    */
   private async selectBySize(
     browser: BrowserSession,
+    searchPage: BrowserPage,
     listings: EnjoeiDomProduct[],
     requestedSizes: string[],
     params: SearchParams,
   ): Promise<EnjoeiDomProduct[]> {
-    const candidates = listings.filter(
+    const eligible = listings.filter(
       (listing) =>
         !listing.size || matchesRequestedEnjoeiSize(requestedSizes, listing.size),
     )
+    const candidates = eligible.slice(0, MAX_SIZE_CHECKS_PER_SEARCH)
 
     const selected: EnjoeiDomProduct[] = []
-    let discarded = 0
-    let checks = 0
+    const stats = { checked: 0, discarded: 0, fallbacks: 0 }
 
-    for (const candidate of candidates) {
-      if (selected.length >= MAX_PRODUCTS_PER_SEARCH) break
+    for (
+      let i = 0;
+      i < candidates.length && selected.length < MAX_PRODUCTS_PER_SEARCH;
+      i += SIZE_LOOKUP_CONCURRENCY
+    ) {
+      const chunk = candidates.slice(i, i + SIZE_LOOKUP_CONCURRENCY)
 
-      if (checks >= MAX_SIZE_CHECKS_PER_SEARCH) {
-        this.deps.logger.warn("Stopped confirming Enjoei sizes at the check cap", {
-          searchTerm: params.searchTerm,
-          requestedSizes,
-          checks,
-          selected: selected.length,
-        })
-        break
-      }
-
-      checks += 1
       await this.deps.delay.humanDelay()
-      const size = await this.readListingSize(browser, candidate.url)
+      const sizes = await this.resolveSizes(browser, searchPage, chunk, stats)
 
-      if (!matchesRequestedEnjoeiSize(requestedSizes, size)) {
-        discarded += 1
-        this.deps.logger.debug("Discarded Enjoei listing with a non-requested size", {
-          searchTerm: params.searchTerm,
-          requestedSizes,
-          listingSize: size,
-          url: candidate.url,
-        })
-        continue
+      for (const candidate of chunk) {
+        if (selected.length >= MAX_PRODUCTS_PER_SEARCH) break
+
+        stats.checked += 1
+        const size = sizes.get(candidate.url) ?? null
+
+        if (!matchesRequestedEnjoeiSize(requestedSizes, size)) {
+          stats.discarded += 1
+          this.deps.logger.debug("Discarded Enjoei listing with a non-requested size", {
+            searchTerm: params.searchTerm,
+            requestedSizes,
+            listingSize: size,
+            url: candidate.url,
+          })
+          continue
+        }
+
+        selected.push({ ...candidate, size })
       }
+    }
 
-      selected.push({ ...candidate, size })
+    if (candidates.length < eligible.length && selected.length < MAX_PRODUCTS_PER_SEARCH) {
+      this.deps.logger.warn("Stopped confirming Enjoei sizes at the check cap", {
+        searchTerm: params.searchTerm,
+        requestedSizes,
+        checks: stats.checked,
+        selected: selected.length,
+      })
+    }
+
+    // Every lookup falling back means the JSON endpoint, not one listing, is
+    // the problem. Left silent it would look like "nothing in the right size".
+    if (stats.checked > 0 && stats.fallbacks === stats.checked) {
+      this.deps.logger.error(
+        "Every Enjoei product-JSON lookup failed — the endpoint or its shape has likely changed",
+        { searchTerm: params.searchTerm, checked: stats.checked },
+      )
     }
 
     this.deps.logger.info("Confirmed Enjoei listing sizes", {
       searchTerm: params.searchTerm,
       requestedSizes,
       cardCount: listings.length,
-      candidateCount: candidates.length,
-      checked: checks,
+      candidateCount: eligible.length,
+      checked: stats.checked,
       kept: selected.length,
-      discarded,
+      discarded: stats.discarded,
+      listingPageFallbacks: stats.fallbacks,
     })
 
     return selected
+  }
+
+  /**
+   * Sizes for one chunk of candidates, keyed by listing URL.
+   *
+   * The chunk is resolved as a single `fetch` fan-out inside the search page
+   * (see `enjoeiReadProductSizesScript`). A candidate the batch could not
+   * answer falls back to opening its listing page, so an endpoint change costs
+   * navigations rather than emptying the results.
+   */
+  private async resolveSizes(
+    browser: BrowserSession,
+    searchPage: BrowserPage,
+    chunk: EnjoeiDomProduct[],
+    stats: { fallbacks: number },
+  ): Promise<Map<string, string | null>> {
+    const idByUrl = new Map<string, string>()
+    for (const candidate of chunk) {
+      const id = enjoeiProductIdFromUrl(candidate.url)
+      if (id) idByUrl.set(candidate.url, id)
+    }
+
+    let lookups: Record<string, EnjoeiProductSizeLookup> = {}
+    const ids = [...new Set(idByUrl.values())]
+
+    if (ids.length > 0) {
+      try {
+        lookups =
+          (await searchPage.evaluate<Record<string, EnjoeiProductSizeLookup>>(
+            enjoeiReadProductSizesScript(ids),
+          )) ?? {}
+      } catch (err) {
+        this.deps.logger.warn("Enjoei product-size batch failed", {
+          idCount: ids.length,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
+    const sizes = new Map<string, string | null>()
+
+    for (const candidate of chunk) {
+      const id = idByUrl.get(candidate.url)
+      const lookup = id ? lookups[id] : undefined
+
+      if (lookup && !lookup.error && "size" in lookup) {
+        sizes.set(candidate.url, lookup.size ?? null)
+        continue
+      }
+
+      this.deps.logger.warn(
+        "Enjoei product JSON gave no size — falling back to the listing page",
+        {
+          url: candidate.url,
+          reason:
+            lookup?.error ??
+            (id ? "missing from the batch response" : "no product id in the URL"),
+        },
+      )
+
+      stats.fallbacks += 1
+      await this.deps.delay.humanDelay()
+      sizes.set(candidate.url, await this.readListingSize(browser, candidate.url))
+    }
+
+    return sizes
   }
 
   private async readListingSize(
