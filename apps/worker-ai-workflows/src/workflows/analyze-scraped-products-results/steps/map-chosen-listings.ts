@@ -21,20 +21,23 @@ function asObject(value: unknown): Record<string, unknown> {
 }
 
 /**
- * Maps LLM choices onto scrape results. Unknown ids and terms with no usable
- * listing are omitted.
+ * Maps LLM choices onto scrape results. Unknown ids, duplicate result ids,
+ * and terms with no usable listing are omitted. Each insert carries the
+ * source `results_search_terms_scraped_products.id`.
  */
 export function buildChosenProductInserts(
   chosen: ChosenListing[],
   results: UnprocessedScrapeResult[],
 ): ScrapedProductInsert[] {
   const byResultId = new Map(results.map((row) => [row.resultId, row]))
+  const usedResultIds = new Set<string>()
   const products: ScrapedProductInsert[] = []
 
   for (const choice of chosen) {
     const row = byResultId.get(choice.resultId)
     if (!row) continue
     if (row.searchTermId !== choice.searchTermScrapedProductId) continue
+    if (usedResultIds.has(row.resultId)) continue
 
     const json = row.jsonResult
     const title = asString(json.title).trim()
@@ -45,7 +48,9 @@ export function buildChosenProductInserts(
     const imageUrl = asString(json.image_url).trim() || PLACEHOLDER_IMAGE_URL
     const currency = asString(json.currency).trim() || "BRL"
 
+    usedResultIds.add(row.resultId)
     products.push({
+      resultSearchTermScrapedProductId: row.resultId,
       marketplace: asString(json.marketplace) || row.marketplace,
       title,
       price: asNumber(json.price, 0),

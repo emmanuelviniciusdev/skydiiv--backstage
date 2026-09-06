@@ -61,10 +61,31 @@ describe("analyze-scraped-products-results", () => {
     const products = buildChosenProductInserts(chosen, [RESULT])
     expect(products).toHaveLength(1)
     expect(products[0]).toMatchObject({
+      resultSearchTermScrapedProductId: "r1",
       title: "Blazer bege",
       searchTerm: "blazer casual",
       marketplace: "enjoei",
     })
+  })
+
+  it("maps at most one listed product per result id", () => {
+    const chosen = parseAnalyzeResultsLlmOutput(
+      JSON.stringify([
+        { searchTermScrapedProductId: "s1", resultId: "r1" },
+        { searchTermScrapedProductId: "s2", resultId: "r1" },
+      ]),
+    )
+    expect(chosen).toEqual([{ searchTermScrapedProductId: "s1", resultId: "r1" }])
+
+    const products = buildChosenProductInserts(
+      [
+        { searchTermScrapedProductId: "s1", resultId: "r1" },
+        { searchTermScrapedProductId: "s2", resultId: "r1" },
+      ],
+      [RESULT],
+    )
+    expect(products).toHaveLength(1)
+    expect(products[0]?.resultSearchTermScrapedProductId).toBe("r1")
   })
 
   it("swapForPanorama does not begin a transaction when the insert list is empty", async () => {

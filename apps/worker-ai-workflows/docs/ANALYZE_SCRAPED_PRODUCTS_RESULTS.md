@@ -73,7 +73,7 @@ Do not publish directly to `WORKER_AI_WORKFLOWS_URL` from the robot.
 Runs only when at least one new `scraped_products` row is ready to insert:
 
 1. `DELETE` existing `scraped_products` for the panorama
-2. `INSERT` the chosen listings (clothing-item `product_type`)
+2. `INSERT` the chosen listings (clothing-item `product_type`), setting `result_search_term_scraped_product_id` to the source `results_search_terms_scraped_products.id` (unique 1:1; required on new analyze inserts)
 3. `DELETE` leftover `results_search_terms_scraped_products` and `search_terms_scraped_products` whose search-term id is **not** in this run’s unprocessed results
 4. `UPDATE` this run’s result rows to `is_processed = true`
 
@@ -88,7 +88,7 @@ Runs only when at least one new `scraped_products` row is ready to insert:
 |---|---|
 | `results_search_terms_scraped_products` (`is_processed = false`) | Input listings for the prompt |
 | `search_terms_scraped_products` | Joined for `json_search` and marketplace |
-| `scraped_products` | Replaced only when new rows are inserted |
+| `scraped_products` | Replaced only when new rows are inserted. Each new row stores `result_search_term_scraped_product_id` pointing at its source result (unique; nullable only for legacy rows the web app still lists) |
 | `llm_interactions` | Audit of the analyze prompt |
 | `shopping-suggestions:{userId}` | Web list cache — deleted after a successful swap |
 | `notification:new-shopping-suggestions:{userId}` | Unread flag — set after a successful swap |
@@ -99,7 +99,7 @@ Runs only when at least one new `scraped_products` row is ready to insert:
 
 | File | Coverage |
 |---|---|
-| `tests/unit/scraped-products-swap.repository.test.ts` | Empty insert list is a no-op; swap keeps this run’s search-term ids; empty keep-ids skip register deletes |
-| `tests/integration/analyze-scraped-products-results.test.ts` | Missing id fails without deletes; zero LLM choices map to no insert; load-context never DELETEs |
+| `tests/unit/scraped-products-swap.repository.test.ts` | Empty insert list is a no-op; swap keeps this run’s search-term ids; INSERT writes `result_search_term_scraped_product_id`; empty keep-ids skip register deletes |
+| `tests/integration/analyze-scraped-products-results.test.ts` | Missing id fails without deletes; zero LLM choices map to no insert; chosen listings carry the result FK; duplicate result ids collapse to one row; load-context never DELETEs |
 | `tests/unit/index.test.ts` | Unsigned POST → 401 |
 | `tests/unit/shopping-suggestions-cache.test.ts` | Redis key names match the web app |

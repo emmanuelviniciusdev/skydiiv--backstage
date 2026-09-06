@@ -21,7 +21,7 @@ function stripMarkdownFences(text: string): string {
 
 /**
  * Parses LLM JSON: one chosen result id per search term.
- * Duplicate search terms keep the first choice.
+ * Duplicate search terms or result ids keep the first choice.
  */
 export function parseAnalyzeResultsLlmOutput(raw: string): ChosenListing[] {
   const cleaned = stripMarkdownFences(raw.trim())
@@ -38,11 +38,14 @@ export function parseAnalyzeResultsLlmOutput(raw: string): ChosenListing[] {
     throw new Error(`LLM response does not match expected schema: ${result.error.message}`)
   }
 
-  const seen = new Set<string>()
+  const seenSearchTerms = new Set<string>()
+  const seenResultIds = new Set<string>()
   const unique: ChosenListing[] = []
   for (const item of result.data) {
-    if (seen.has(item.searchTermScrapedProductId)) continue
-    seen.add(item.searchTermScrapedProductId)
+    if (seenSearchTerms.has(item.searchTermScrapedProductId)) continue
+    if (seenResultIds.has(item.resultId)) continue
+    seenSearchTerms.add(item.searchTermScrapedProductId)
+    seenResultIds.add(item.resultId)
     unique.push(item)
   }
   return unique

@@ -55,6 +55,7 @@ function getInterpolatedValues(mock: ReturnType<typeof vi.fn>): unknown[] {
 }
 
 const PRODUCT = {
+  resultSearchTermScrapedProductId: "r-new",
   marketplace: "enjoei",
   title: "Blazer bege",
   price: 80,
@@ -121,6 +122,7 @@ describe("SqlScrapedProductsSwapRepository.swapForPanorama", () => {
     const calls = getSqlCallStrings(tx)
     expect(calls[0]).toMatch(/DELETE FROM scraped_products/)
     expect(calls[1]).toMatch(/INSERT INTO scraped_products/)
+    expect(calls[1]).toMatch(/result_search_term_scraped_product_id/)
     expect(calls[2]).toMatch(/DELETE FROM results_search_terms_scraped_products/)
     expect(calls[2]).toMatch(/NOT IN/)
     expect(calls[3]).toMatch(/DELETE FROM search_terms_scraped_products/)
@@ -133,6 +135,7 @@ describe("SqlScrapedProductsSwapRepository.swapForPanorama", () => {
 
     const values = getInterpolatedValues(tx)
     expect(values).toContain("p1")
+    expect(values).toContain("r-new")
     expect(values).toContainEqual(["s-new"])
     expect(values).not.toContain("p2")
   })

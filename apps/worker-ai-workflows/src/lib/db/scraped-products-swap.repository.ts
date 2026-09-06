@@ -5,6 +5,7 @@ const CREATED_BY = "worker-ai-workflows"
 const PLACEHOLDER_IMAGE_URL = "https://assets.skydiiv.space/placeholder--scraped-product.png"
 
 export interface ScrapedProductInsert {
+  resultSearchTermScrapedProductId: string
   marketplace: string
   title: string
   price: number
@@ -111,9 +112,10 @@ export class SqlScrapedProductsSwapRepository implements ScrapedProductsSwapRepo
    * is empty — search/result registers are never deleted outside this swap.
    *
    * When inserting, last week's `scraped_products` are removed and the new
-   * rows are kept. Prior search-term/result rows for other pipeline runs are
-   * removed; this run's ids in `keepSearchTermIds` stay, with their result
-   * rows marked processed.
+   * rows are kept, each linked to its source result via
+   * `result_search_term_scraped_product_id`. Prior search-term/result rows
+   * for other pipeline runs are removed; this run's ids in `keepSearchTermIds`
+   * stay, with their result rows marked processed.
    */
   async swapForPanorama(input: {
     wardrobePanoramaId: string
@@ -138,6 +140,7 @@ export class SqlScrapedProductsSwapRepository implements ScrapedProductsSwapRepo
             id,
             wardrobe_panorama_id,
             product_type_id,
+            result_search_term_scraped_product_id,
             marketplace,
             title,
             price,
@@ -155,6 +158,7 @@ export class SqlScrapedProductsSwapRepository implements ScrapedProductsSwapRepo
             ${randomUUID()},
             ${input.wardrobePanoramaId},
             ${productTypeId},
+            ${product.resultSearchTermScrapedProductId},
             ${product.marketplace},
             ${product.title},
             ${product.price},
